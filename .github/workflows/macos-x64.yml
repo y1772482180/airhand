@@ -1,11 +1,13 @@
 name: macOS x64 only
 on:
   workflow_dispatch:
+  push:
+    paths:
+      - "ci-trigger.txt"
 
 jobs:
   macos-x64:
     name: macOS x64
-    # 官方托管 runner（arm64），交叉编译 x86_64；不需要自建 xcode-27 runner
     runs-on: macos-14
     timeout-minutes: 90
     steps:
@@ -31,7 +33,6 @@ jobs:
         run: |
           mkdir -p dist
           cp client/src-tauri/target/x86_64-apple-darwin/release/bundle/dmg/*.dmg dist/ || true
-          cp -R client/src-tauri/target/x86_64-apple-darwin/release/bundle/macos/*.app dist/ || true
           ls -l dist
 
       - uses: actions/upload-artifact@v4
