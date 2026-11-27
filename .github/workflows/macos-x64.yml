@@ -1,0 +1,41 @@
+name: macOS x64 only
+on:
+  workflow_dispatch:
+
+jobs:
+  macos-x64:
+    name: macOS x64
+    # 官方托管 runner（arm64），交叉编译 x86_64；不需要自建 xcode-27 runner
+    runs-on: macos-14
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: client/package-lock.json
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-apple-darwin
+
+      - name: Build
+        working-directory: client
+        run: |
+          npm ci --no-audit --no-fund
+          npx tauri build --target x86_64-apple-darwin
+
+      - name: Collect
+        run: |
+          mkdir -p dist
+          cp client/src-tauri/target/x86_64-apple-darwin/release/bundle/dmg/*.dmg dist/ || true
+          cp -R client/src-tauri/target/x86_64-apple-darwin/release/bundle/macos/*.app dist/ || true
+          ls -l dist
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: airhand-macos-x64
+          path: dist/*
+          if-no-files-found: error
