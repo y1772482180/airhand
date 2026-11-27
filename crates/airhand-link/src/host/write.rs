@@ -154,6 +154,13 @@ async fn write_frames(
             .context("not a video packet")?;
         let seq = h.seq;
         let sealed = seal(frame, &mut sealer)?;
+        // 按当前发送速率摊开（见 crate::pacer）：不再把一帧的字节一次性灌进链路。
+        // 上限取连接自己的 pacing_rate（quinn 只算不用，这里用它当"单环"的另一半）
+        // 发送节流：默认关。实测在"编码器实际码率远高于目标"的情况下，令牌桶靠自身观测收敛，
+        // 会把自己锁在初值上，反而把帧卡住（fps 从 21 掉到 10）。等 mf.rs 的速率控制修好再开。
+        if std::env::var_os("AIRHAND_PACER").is_some_and(|v| v == "1") {
+            paths.pacer().acquire(sealed.len()).await;
+        }
         if let Some(conn) = paths.media() {
             // 开流、写这一帧加起来最多等这么久：直连卡住了就改从中转发，不先在开流上等好几秒
             let deadline = Instant::now() + DIRECT_WRITE_TIMEOUT;

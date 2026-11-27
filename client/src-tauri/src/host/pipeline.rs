@@ -342,6 +342,16 @@ fn run(ctrl: Arc<Ctrl>, stream: u8, screen: u8, video: mpsc::Sender<Bytes>, out:
                 return;
             }
         }
+        // 码率上限的硬兜底：硬件 MFT 实测不认 CODECAPI 的 MeanBitRate / MaxBitRate（5 Mbps 会跑成 25 Mbps），
+        // 最近一秒发出去的字节超了目标 1.15 倍就跳过这一帧。关键帧不跳（丢了关键帧画面会一直花）。
+        // 默认关：实测"能跑高码率"比"严格贴住目标"对体验更重要（用户要求不限制）。
+        // 需要时用 AIRHAND_HARD_CAP=1 打开。
+        if !force
+            && std::env::var_os("AIRHAND_HARD_CAP").is_some()
+            && ctrl.flow.over_budget()
+        {
+            continue;
+        }
         // 取等待期间到达的最新一帧；没有的话重新编码上一帧（关键帧、补画质）
         let (frame, fresh) = match slot.try_newer(frame_seq, draw) {
             Some((s, f)) => {

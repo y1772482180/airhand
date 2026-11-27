@@ -54,6 +54,8 @@ struct Shared {
     state: Mutex<State>,
     /// 往现在这条直连上写画面失败了几次（[`Paths::report_broken`]）
     broken: watch::Sender<u64>,
+    /// 画面帧的发送节流（见 [`crate::pacer`]）
+    pacer: crate::pacer::Pacer,
 }
 
 #[derive(Default)]
@@ -76,11 +78,17 @@ impl Paths {
             relay,
             state: Mutex::default(),
             broken: watch::Sender::new(0),
+            pacer: crate::pacer::Pacer::new(),
         }))
     }
 
     pub fn relay(&self) -> &Connection {
         &self.0.relay
+    }
+
+    /// 画面帧的发送节流器（见 [`crate::pacer`]）：写每一帧之前先等令牌
+    pub fn pacer(&self) -> &crate::pacer::Pacer {
+        &self.0.pacer
     }
 
     /// 通着的直连

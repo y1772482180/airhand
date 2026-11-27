@@ -122,7 +122,13 @@ pub struct Setup {
     /// 每个会话从开始连接到结束（连不上、断开）一直拿着它返回的东西，例如 macOS 桌面版在远程控制期间暂停 AWDL
     /// （客户端的 `awdl.rs`）。`None`：没有要做的
     pub session: Option<fn() -> SessionGuard>,
+    /// 桌面版（macOS）：每一帧画面（原始媒体包，带 24 字节媒体头）也交给宿主，原生渲染层自己解、自己上屏。
+    /// 网页版传 `None`。
+    pub on_video: Option<VideoTap>,
 }
+
+/// 见 [`Setup::on_video`]
+pub type VideoTap = Arc<dyn Fn(&[u8]) + Send + Sync>;
 
 /// 见 [`Setup::session`]：会话结束时放开（drop）
 pub type SessionGuard = Box<dyn Send + Sync>;
@@ -362,6 +368,7 @@ where
         info: setup.info,
         clipboard: setup.clipboard,
         session: setup.session,
+        on_video: setup.on_video,
         tasks: JoinSet::new(),
     };
 
@@ -461,10 +468,15 @@ struct ConsoleUi {
     out: Outbox,
     /// [`Setup::session`] 给的：会话（连接中的、连上了的）拿着界面，会话结束时界面和它一起放开
     _guard: Option<SessionGuard>,
+    /// [`Setup::on_video`] 给的：画面帧也交给宿主（macOS 原生渲染层）
+    on_video: Option<VideoTap>,
 }
 
 impl SessionUi for ConsoleUi {
     fn packet(&self, mut packet: Vec<u8>) -> Result<(), UiClosed> {
+        if let Some(tap) = &self.on_video {
+            tap(&packet);
+        }
         // 解密后原缓冲还留着标签和计数（24 字节）的容量，直接用它放通道号，避免再分配整包
         let len = packet.len();
         packet.resize(len + 4, 0);
@@ -491,6 +503,8 @@ struct Console {
     info: Value,
     clipboard: Option<fn() -> Box<dyn ClipboardSync>>,
     session: Option<fn() -> SessionGuard>,
+    /// 见 [`Setup::on_video`]
+    on_video: Option<VideoTap>,
     /// 进行中的 `connect`；控制台关闭时一起中止
     tasks: JoinSet<()>,
 }
@@ -661,11 +675,13 @@ impl Console {
                 };
                 let (svc, out) = (self.svc.clone(), self.out.clone());
                 let guard = self.session.map(|new| new());
+                let on_video = self.on_video.clone();
                 self.tasks.spawn(async move {
                     let ui = Arc::new(ConsoleUi {
                         ch,
                         out: out.clone(),
                         _guard: guard,
+                        on_video,
                     });
                     let r = svc.connect(&code, opts, ui, frontend).await;
                     out.reply(
@@ -935,6 +951,7 @@ mod tests {
             ch: 7,
             out,
             _guard: None,
+            on_video: None,
         };
         let mut packet = Vec::with_capacity(3 + airhand_proto::handshake::SEAL_OVERHEAD);
         packet.extend_from_slice(&[1, 2, 3]);

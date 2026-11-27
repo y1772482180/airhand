@@ -70,7 +70,7 @@ pub const ACK_TIMEOUT: Duration = Duration::from_secs(20);
 /// 基础 RTT、最小单向时延取这么长时间里的最小样本
 pub const MIN_RTT_WINDOW: Duration = Duration::from_secs(10);
 /// 在途字节按 基础 RTT 加上这么久 算：网络里最多排这么久的队（毫秒）
-pub const QUEUE_ALLOWANCE_MS: f64 = 50.0;
+pub const QUEUE_ALLOWANCE_MS: f64 = 120.0;
 /// 排队超过这么久算拥塞（毫秒）。比 [`QUEUE_ALLOWANCE_MS`] 小：在途字节卡住之前先降码率
 pub const QUEUE_HIGH_MS: f64 = 30.0;
 /// 排队少于这么久算通畅（毫秒）
@@ -174,6 +174,8 @@ pub struct FlowState {
     /// 每帧的估计包数和上一个报告，用于从帧停顿率估计丢包。
     packets_per_frame: f64,
     last_report: Option<(Instant, VideoReport)>,
+    /// 最近一秒发出去的 (时刻, 字节)，见 [`FlowState::over_budget`]
+    sent_log: VecDeque<(Instant, usize)>,
 }
 
 impl Default for FlowState {
@@ -196,6 +198,7 @@ impl Default for FlowState {
             refs: Refs::default(),
             packets_per_frame: 1.0,
             last_report: None,
+            sent_log: VecDeque::new(),
         }
     }
 }
@@ -206,6 +209,16 @@ impl FlowState {
     }
 
     fn on_sent_at(&mut self, seq: u32, bytes: usize, now: Instant) {
+        // 最近一秒发出去的字节：编码器不认码率上限时（实测 NVIDIA MFT 会把 5 Mbps 跑成 25 Mbps）
+        // 靠它做硬限速，超了就跳过这一帧
+        self.sent_log.push_back((now, bytes));
+        while let Some((t, _)) = self.sent_log.front() {
+            if now.saturating_duration_since(*t) > Duration::from_secs(1) {
+                self.sent_log.pop_front();
+            } else {
+                break;
+            }
+        }
         // 约 1200 字节有效载荷一个 QUIC 包，使用平滑值以减小关键帧的影响。
         self.packets_per_frame =
             0.9 * self.packets_per_frame + 0.1 * bytes.div_ceil(1200).max(1) as f64;
@@ -392,6 +405,19 @@ impl FlowState {
         self.pending
             .front()
             .is_some_and(|f| f.at.elapsed() > ACK_TIMEOUT)
+    }
+
+    /// 最近一秒发出去的字节是不是已经超过 目标码率 × 1.15（编码器不认码率上限时的兜底）
+    pub fn over_budget(&self, now: Instant) -> bool {
+        let budget = self.rate.estimate * 1.15 / 8.0; // 字节/秒
+        let mut sum = 0.0;
+        for (t, b) in self.sent_log.iter().rev() {
+            if now.saturating_duration_since(*t) > Duration::from_secs(1) {
+                break;
+            }
+            sum += *b as f64;
+        }
+        sum > budget
     }
 
     /// 在途字节的上限：码率 × (基础 RTT + [`QUEUE_ALLOWANCE_MS`])
@@ -739,6 +765,11 @@ impl Flow {
         self.state.lock().unwrap().bitrate_kbps()
     }
 
+    /// 见 [`FlowState::over_budget`]
+    pub fn over_budget(&self) -> bool {
+        self.state.lock().unwrap().over_budget(Instant::now())
+    }
+
     /// 见 [`FlowState::feedback`]
     pub fn feedback(&self, report: VideoReport) {
         self.state.lock().unwrap().feedback(report, Instant::now());
@@ -965,14 +996,15 @@ mod tests {
     fn the_window_is_bytes_at_the_current_rate() {
         let mut f = FlowState::default();
         f.set_target(4000, true);
-        // 还没有 RTT 样本：按 100 ms 算，4000 kbps × 150 ms = 75 000 字节
-        assert_eq!(f.window_bytes(), 75_000);
+        // 还没有 RTT 样本：按 100 ms 算，4000 kbps × (100 + 120) ms = 110 000 字节
+        assert_eq!(f.window_bytes(), 110_000);
         f.min_rtt.push(30.0, Instant::now());
-        assert_eq!(f.window_bytes(), 40_000);
+        // 30 ms RTT：4000 kbps × (30 + 120) ms = 75 000 字节
+        assert_eq!(f.window_bytes(), 75_000);
         assert!(f.can_send(10 * 1024 * 1024));
-        f.on_sent(1, 30_000);
-        assert!(f.can_send(10_000));
-        assert!(!f.can_send(10_001));
+        f.on_sent(1, 70_000);
+        assert!(f.can_send(5_000));
+        assert!(!f.can_send(5_001));
         f.on_ack(1, None);
         assert!(f.can_send(10 * 1024 * 1024));
         // 很慢的码率也至少有 16 KiB；很快的码率、很长的 RTT 也不超过上限

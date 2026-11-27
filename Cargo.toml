@@ -3,7 +3,7 @@
 # 这样 Docker 构建中转服务器时既不需要 GUI 依赖，也不需要网页控制台的代码。
 [workspace]
 resolver = "3"
-members = ["crates/airhand-proto", "crates/airhand-link", "crates/airhand-mobile", "server"]
+members = ["crates/airhand-proto", "crates/airhand-link", "crates/airhand-mobile", "crates/airhand-bench", "server"]
 
 [workspace.package]
 version = "0.4.0"

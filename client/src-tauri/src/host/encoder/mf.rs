@@ -541,20 +541,40 @@ impl MfEncoder {
             if let Some(api) = &codec_api {
                 let set = |k: &GUID, v: VARIANT| api.SetValue(k, &v).is_ok();
                 set(&CODECAPI_AVLowLatencyMode, VARIANT::from(true));
-                if !set(
-                    &CODECAPI_AVEncCommonRateControlMode,
-                    VARIANT::from(eAVEncCommonRateControlMode_LowDelayVBR.0 as u32),
-                ) {
+                // 速率控制：默认 LowDelayVBR，设不上退 CBR；AIRHAND_RC=cbr 可以强制 CBR 做 A/B。
+                // 实测 NVIDIA 的 MFT 会把 5 Mbps 的目标跑成 14–25 Mbps，所以这里把每个 SetValue 的结果
+                // 都留着：设不上要能在日志里看到，而不是静默地跑飞。
+                let want_cbr = std::env::var("AIRHAND_RC").is_ok_and(|v| v.eq_ignore_ascii_case("cbr"));
+                let rc = if want_cbr {
                     set(
                         &CODECAPI_AVEncCommonRateControlMode,
                         VARIANT::from(eAVEncCommonRateControlMode_CBR.0 as u32),
+                    )
+                } else {
+                    set(
+                        &CODECAPI_AVEncCommonRateControlMode,
+                        VARIANT::from(eAVEncCommonRateControlMode_LowDelayVBR.0 as u32),
+                    ) || set(
+                        &CODECAPI_AVEncCommonRateControlMode,
+                        VARIANT::from(eAVEncCommonRateControlMode_CBR.0 as u32),
+                    )
+                };
+                let mean = set(&CODECAPI_AVEncCommonMeanBitRate, VARIANT::from(bps));
+                // 上限收到 1.25×（原来 1.5×）：这是"编码器跑飞"时唯一还能兜住的东西
+                let max = set(
+                    &CODECAPI_AVEncCommonMaxBitRate,
+                    VARIANT::from(bps.saturating_mul(5) / 4),
+                );
+                if !(rc && mean && max) {
+                    tracing::warn!(
+                        rc,
+                        mean,
+                        max,
+                        kbps,
+                        cbr = want_cbr,
+                        "the encoder refused part of the rate control settings: it may send much more than the target bitrate"
                     );
                 }
-                set(&CODECAPI_AVEncCommonMeanBitRate, VARIANT::from(bps));
-                set(
-                    &CODECAPI_AVEncCommonMaxBitRate,
-                    VARIANT::from(bps.saturating_mul(3) / 2),
-                );
                 set(&CODECAPI_AVEncMPVDefaultBPictureCount, VARIANT::from(0u32));
                 // 超长 GOP：画面静止时不编码，关键帧只在控制端请求或分辨率变化时产生
                 set(&CODECAPI_AVEncMPVGOPSize, VARIANT::from(fps as u32 * 600));

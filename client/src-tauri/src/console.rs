@@ -122,6 +122,19 @@ async fn connection(tcp: TcpStream, gate: Arc<Gate>, app: AppHandle) {
         report: Some(status::controller_reporter(&state.hub)),
         clipboard: Some(|| Box::new(clipboard::ClipSync::new())),
         session: session_guard(),
+        // macOS：画面帧也交给原生渲染层（VT 解码 + CAMetalLayer 上屏）
+        #[cfg(target_os = "macos")]
+        on_video: Some(Arc::new(|packet: &[u8]| {
+            // 媒体头：0 类型、3 头长；1 = 画面
+            if packet.first() == Some(&1)
+                && let Some(&hlen) = packet.get(3)
+                && (hlen as usize) <= packet.len()
+            {
+                crate::native_video::feed_video(&packet[hlen as usize..]);
+            }
+        })),
+        #[cfg(not(target_os = "macos"))]
+        on_video: None,
     };
     let socket = ws
         .with(|m| future::ready(Ok::<_, tungstenite::Error>(to_tungstenite(m))))

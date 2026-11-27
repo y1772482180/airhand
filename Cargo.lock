@@ -47,6 +47,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "airhand-bench"
+version = "0.4.0"
+dependencies = [
+ "airhand-link",
+ "airhand-proto",
+ "anyhow",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "airhand-link"
 version = "0.4.0"
 dependencies = [

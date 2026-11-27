@@ -16,6 +16,9 @@
 // 最先声明：其它模块都要用到 `tr!`
 #[macro_use]
 mod i18n;
+
+#[cfg(target_os = "macos")]
+mod native_video;
 #[cfg(target_os = "macos")]
 mod awdl;
 mod clipboard;
@@ -802,6 +805,8 @@ pub fn run() {
             switch_to_host,
             devices_load,
             devices_save,
+            native_video_install,
+            native_video_rect,
         ])
         .setup(move |app| {
             let handle = app.handle().clone();
@@ -1133,6 +1138,31 @@ fn init_logging() {
 /// Linux：收到 SIGTERM（注销/关机）、SIGINT（终端里按 Ctrl+C）、SIGHUP 时正常退出，照样清理临时目录。
 ///
 /// 信号处理函数里只做一件事：往管道里写一个字节（异步信号安全），由单独的线程读到后通知事件循环退出。
+/// macOS 原生渲染层：装一个 CAMetalLayer 视图（见 native_video）
+#[tauri::command]
+fn native_video_install(app: AppHandle) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        native_video::install(&app)
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = app;
+        Err("not supported on this platform".into())
+    }
+}
+
+/// 前端上报画面矩形（窗口内 CSS 像素 + 缩放）
+#[tauri::command]
+fn native_video_rect(x: f64, y: f64, w: f64, h: f64, scale: f64) {
+    #[cfg(target_os = "macos")]
+    native_video::set_rect(x, y, w, h, scale);
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = (x, y, w, h, scale);
+    }
+}
+
 #[cfg(target_os = "linux")]
 fn exit_on_signals(app: AppHandle) {
     use std::sync::atomic::{AtomicI32, Ordering};

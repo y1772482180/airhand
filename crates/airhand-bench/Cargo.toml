@@ -1,0 +1,15 @@
+[package]
+name = "airhand-bench"
+description = "Headless controller used to measure the network layer (path RTT, stalls, direct-path ratio)"
+version = "0.4.0"
+edition = "2024"
+license = "MIT"
+
+[dependencies]
+airhand-proto = { path = "../airhand-proto" }
+airhand-link = { path = "../airhand-link", features = ["client"] }
+anyhow = "1"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "sync"] }
+serde_json = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }

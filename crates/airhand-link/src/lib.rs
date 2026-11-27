@@ -48,6 +48,7 @@ pub mod merge;
 #[cfg(feature = "client")]
 pub mod net;
 #[cfg(feature = "client")]
+pub mod pacer;
 pub mod paths;
 #[cfg(feature = "client")]
 mod problem;
